@@ -115,3 +115,66 @@ ALTER TABLE `room_invitation`
   ADD CONSTRAINT `fk_room_invitation_to_user`
     FOREIGN KEY (`to_user`) REFERENCES `users`(`id`)
     ON DELETE CASCADE ON UPDATE CASCADE;
+
+
+CREATE TABLE role_voices (
+  id          INT PRIMARY KEY AUTO_INCREMENT,
+  role_id     VARCHAR(20)  NOT NULL COMMENT '角色ID',
+  scenario    VARCHAR(30)  NOT NULL COMMENT '场合',
+  sentence    VARCHAR(30)  NOT NULL COMMENT '语句'
+  file_path   VARCHAR(200) NOT NULL COMMENT '音频路径',
+  INDEX idx_role_scenario (role_id, scenario),
+  
+  -- 外键约束：关联到 users 表的 id 字段
+  CONSTRAINT fk_role_voices_user_id 
+    FOREIGN KEY (role_id) 
+    REFERENCES users(id) 
+    ON DELETE CASCADE 
+    ON UPDATE CASCADE
+) COMMENT='角色语音表';
+
+第二次数据库优化
+
+CREATE TABLE `skins` (
+  `id`              INT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '皮肤ID',
+  `role_id`         INT UNSIGNED NOT NULL              COMMENT '所属角色ID',
+  `skin_name`       VARCHAR(50)  NOT NULL              COMMENT '皮肤名称',
+  `portrait_id`     VARCHAR(50)  NOT NULL              COMMENT '立绘资源标识',
+  `rarity`          TINYINT      NOT NULL DEFAULT 0    COMMENT '稀有度：0普通 1稀有 2史诗 3传说',
+  `description`     VARCHAR(255) DEFAULT NULL          COMMENT '皮肤描述',
+  `unlock_condition` VARCHAR(100) DEFAULT NULL         COMMENT '解锁条件描述（如：战斗100胜）',
+  `created_at`      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_role_id` (`role_id`),
+  CONSTRAINT `fk_skins_role` FOREIGN KEY (`role_id`) REFERENCES `roles`(`role_id`)
+    ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='皮肤表';
+
+CREATE TABLE `user_skins` (
+  `id`          INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `user_id`     INT UNSIGNED NOT NULL COMMENT '用户ID',
+  `skin_id`     INT UNSIGNED NOT NULL COMMENT '皮肤ID',
+  `obtained_at` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '获取时间',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_user_skin` (`user_id`, `skin_id`),
+  CONSTRAINT `fk_user_skins_user` FOREIGN KEY (`user_id`) REFERENCES `users`(`id`)
+    ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT `fk_user_skins_skin` FOREIGN KEY (`skin_id`) REFERENCES `skins`(`id`)
+    ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='用户皮肤表';
+
+-- 用户-角色-皮肤 装备关系表
+CREATE TABLE `user_role_skin` (
+  `id`       INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `user_id`  INT UNSIGNED NOT NULL COMMENT '用户ID',
+  `role_id`  INT UNSIGNED NOT NULL COMMENT '角色ID',
+  `skin_id`  INT UNSIGNED NOT NULL COMMENT '装备的皮肤ID',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_user_role` (`user_id`, `role_id`),
+  CONSTRAINT `fk_urs_user` FOREIGN KEY (`user_id`) REFERENCES `users`(`id`)
+    ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT `fk_urs_role` FOREIGN KEY (`role_id`) REFERENCES `roles`(`role_id`)
+    ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT `fk_urs_skin` FOREIGN KEY (`skin_id`) REFERENCES `skins`(`id`)
+    ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户角色皮肤装备表';
