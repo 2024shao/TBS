@@ -82,6 +82,7 @@ import { ref, onMounted, onUnmounted, toRefs, computed } from 'vue'
 import { roleBgUrl, avatarUrl } from '../config/cdn'
 import { getAllRoles } from '../api/game'
 import { gameState, doPhaseTransition } from '../composables/useGameState'
+import { useGameWs } from '../composables/useGameWs'
 
 const { roomId, userId, mySide, myUsername, myAssistantId, opponentUsername, opponentAssistantId } = toRefs(gameState)
 const myPicks = computed(() => gameState.myPicks || [])
@@ -90,7 +91,30 @@ const selectedSlot = ref(-1)
 const confirmed = ref(false)
 const announceMsg = ref('请调整我方阵容位置')
 const roles = ref([])
-let ws = null
+const { connect, send, onMessage } = useGameWs()
+
+// 注册消息处理
+const unregister = onMessage((msg) => {
+  switch (msg.type) {
+    case 'POSITION_CONFIRMED':
+      if (msg.userId !== userId.value) announceMsg.value = '对方已确认位置'
+      break
+    case 'POSITION_PHASE_COMPLETE':
+      gameState.roleIds = msg.roleIds.join(' ')
+      gameState.sessionId = roomId.value + '_' + Date.now()
+      doPhaseTransition('game')
+      break
+    case 'PLAYER_LEFT':
+      alert('对方已离开')
+      gameState.phase = 'none'
+      break
+    case 'PLAYER_RECONNECTED':
+      if (msg.userId !== userId.value) {
+        ElMessage.success('对方已重连')
+      }
+      break
+  }
+})
 
 function getRole(roleId) {
   return roles.value.find(r => r.roleId === roleId)
@@ -147,55 +171,27 @@ function onPanelEnter() {
 }
 
 function confirmPosition() {
-  ws.send(JSON.stringify({
+  send({
     type: 'CONFIRM_POSITION',
     roomId: roomId.value,
     userId: userId.value,
     role: mySide.value,
     order: [...myOrder.value]
-  }))
+  })
   confirmed.value = true
   announceMsg.value = '已确认位置，等待对方...'
-}
-
-function connect() {
-  ws = new WebSocket(`ws://${location.hostname}:8080/ws/game`)
-  ws.onopen = () => {
-    ws.send(JSON.stringify({ type: 'JOIN_ROOM', roomId: roomId.value, userId: userId.value, username: myUsername.value, side: mySide.value }))
-  }
-  ws.onmessage = (e) => {
-    const msg = JSON.parse(e.data)
-    switch (msg.type) {
-      case 'POSITION_CONFIRMED':
-        if (msg.userId !== userId.value) {
-          announceMsg.value = '对方已确认位置'
-        }
-        break
-      case 'POSITION_PHASE_COMPLETE':
-        gameState.roleIds = msg.roleIds.join(' ')
-        gameState.sessionId = roomId.value + '_' + Date.now()
-        doPhaseTransition('game')
-        break
-      case 'PLAYER_LEFT':
-        alert('对方已离开')
-        gameState.phase = 'none'
-        break
-    }
-  }
 }
 
 onMounted(async () => {
   const res = await getAllRoles()
   roles.value = Array.isArray(res) ? res : (res.data || [])
-  connect()
+  connect(roomId.value, userId.value, mySide.value, myUsername.value)
 })
 
 onUnmounted(() => {
-  if (ws) {
-    if (gameState.phase === 'none') {
-      ws.send(JSON.stringify({ type: 'LEAVE_ROOM', roomId: roomId.value, userId: userId.value }))
-    }
-    ws.close()
+  unregister();
+  if (gameState.phase === 'none') {
+    send({ type: 'LEAVE_ROOM', roomId: roomId.value, userId: userId.value })
   }
 })
 </script>

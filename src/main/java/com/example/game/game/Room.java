@@ -59,8 +59,8 @@ public class Room {
         stateProcessor = new StateProcessor();
         actionProcessor = new ActionProcessor();
         attackProcessor = new AttackProcessor();
-        skillExecutor = new SkillExecutor("com.example.game.service.processor.SkillProcessor.skills");
-        passiveExecutor = new AutoPassiveExecutor("com.example.game.service.processor.PassiveProcessor.passives", this);
+        skillExecutor = new SkillExecutor("com.example.game.game.processor.SkillProcessor.skills");
+        passiveExecutor = new AutoPassiveExecutor("com.example.game.game.processor.PassiveProcessor.passives", this);
         damageProcessor = new DamageProcessor();
         survivalChecker = new SurvivalChecker();
         positionSwapProcessor = new PositionSwapProcessor();

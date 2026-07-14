@@ -113,6 +113,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { roleBgUrl, avatarUrl } from '../config/cdn'
 import { getAllRoles } from '../api/game'
 import { gameState, doPhaseTransition } from '../composables/useGameState'
+import { useGameWs } from '../composables/useGameWs'
 
 const roomId = computed(() => gameState.roomId)
 const userId = computed(() => gameState.userId)
@@ -121,6 +122,7 @@ const myUsername = computed(() => gameState.myUsername)
 const myAssistantId = computed(() => gameState.myAssistantId)
 const opponentUsername = computed(() => gameState.opponentUsername)
 const opponentAssistantId = computed(() => gameState.opponentAssistantId)
+const { connect, send, onMessage } = useGameWs()
 
 const roles = ref([])
 const team0Picks = ref([])
@@ -136,7 +138,6 @@ const currentSide = ref(-1)
 const announceMsg = ref('等待开始...')
 const allTurnsDone = ref(false)
 const myRosterConfirmed = ref(false)
-let ws = null
 
 const isMyTurn = computed(() => {
   if (allTurnsDone.value) return false
@@ -144,6 +145,49 @@ const isMyTurn = computed(() => {
 })
 const selectedRole = computed(() => {
   return roles.value.find(r => r.roleId === selectedRoleId.value) || null
+})
+
+// 注册消息处理
+const unregister = onMessage((msg) => {
+  switch (msg.type) {
+    case 'TURN_CHANGE':
+      currentTurn.value = msg.turn
+      currentAction.value = msg.action
+      currentCount.value = msg.count
+      currentSide.value = msg.side
+      announceMsg.value = msg.message
+      break
+    case 'TURN_COMPLETE':
+      if (msg.action === 'pick') {
+        if (msg.side === 0) team0Picks.value = [...team0Picks.value, ...msg.roleIds]
+        else team1Picks.value = [...team1Picks.value, ...msg.roleIds]
+      } else {
+        if (msg.side === 0) team0Bans.value = [...team0Bans.value, ...msg.roleIds]
+        else team1Bans.value = [...team1Bans.value, ...msg.roleIds]
+      }
+      break
+    case 'ALL_TURNS_DONE':
+      allTurnsDone.value = true
+      announceMsg.value = '请确认阵容'
+      break
+    case 'ROSTER_CONFIRMED':
+      if (msg.userId !== userId.value) announceMsg.value = '对方已确认阵容'
+      break
+    case 'PICK_PHASE_COMPLETE':
+      gameState.myPicks = mySide.value === 0 ? msg.hostPicks : msg.guestPicks
+      doPhaseTransition('position')
+      break
+    case 'PLAYER_LEFT':
+      announceMsg.value = '对方已离开'
+      alert('对方已离开')
+      gameState.phase = 'none'
+      break
+    case 'PLAYER_RECONNECTED':
+      if (msg.userId !== userId.value) {
+        ElMessage.success('对方已重连')
+      }
+      break
+  }
 })
 
 function isPicked(roleId) {
@@ -170,81 +214,30 @@ function selectRole(role) {
 }
 
 function confirmPick() {
-  ws.send(JSON.stringify({
+  send({
     type: 'CONFIRM_PICK', roomId: roomId.value, userId: userId.value, role: mySide.value, picks: [...tempSelection.value]
-  }))
+  })
   tempSelection.value = []
 }
 function confirmBan() {
-  ws.send(JSON.stringify({
+  send({
     type: 'CONFIRM_BAN', roomId: roomId.value, userId: userId.value, role: mySide.value, bans: [...tempSelection.value]
-  }))
+  })
   tempSelection.value = []
 }
 function confirmRoster() {
-  ws.send(JSON.stringify({ type: 'CONFIRM_ROSTER', roomId: roomId.value, userId: userId.value, role: mySide.value }))
+  send({ type: 'CONFIRM_ROSTER', roomId: roomId.value, userId: userId.value, role: mySide.value })
   myRosterConfirmed.value = true
-}
-
-function connect() {
-  ws = new WebSocket(`ws://${location.hostname}:8080/ws/game`)
-  ws.onopen = () => {
-    ws.send(JSON.stringify({ type: 'JOIN_ROOM', roomId: roomId.value, userId: userId.value, username: myUsername.value, side: mySide.value }))
-  }
-  ws.onmessage = (e) => {
-    const msg = JSON.parse(e.data)
-    switch (msg.type) {
-      case 'TURN_CHANGE':
-        currentTurn.value = msg.turn
-        currentAction.value = msg.action
-        currentCount.value = msg.count
-        currentSide.value = msg.side
-        announceMsg.value = msg.message
-        break
-      case 'TURN_COMPLETE':
-        if (msg.action === 'pick') {
-          if (msg.side === 0) team0Picks.value = [...team0Picks.value, ...msg.roleIds]
-          else team1Picks.value = [...team1Picks.value, ...msg.roleIds]
-        } else {
-          if (msg.side === 0) team0Bans.value = [...team0Bans.value, ...msg.roleIds]
-          else team1Bans.value = [...team1Bans.value, ...msg.roleIds]
-        }
-        break
-      case 'ALL_TURNS_DONE':
-        allTurnsDone.value = true
-        announceMsg.value = '请确认阵容'
-        break
-      case 'ROSTER_CONFIRMED':
-        if (msg.userId !== userId.value) {
-          announceMsg.value = '对方已确认阵容'
-        }
-        break
-      case 'PICK_PHASE_COMPLETE':
-        gameState.myPicks = mySide.value === 0 ? msg.hostPicks : msg.guestPicks
-        doPhaseTransition('position')
-        break
-      case 'PLAYER_LEFT':
-        announceMsg.value = '对方已离开'
-        alert('对方已离开')
-        gameState.phase = 'none'
-        break
-    }
-  }
 }
 
 onMounted(async () => {
   const res = await getAllRoles()
   roles.value = Array.isArray(res) ? res : (res.data || [])
-  connect()
+  connect(roomId.value, userId.value, mySide.value, myUsername.value)
 })
 
 onUnmounted(() => {
-  if (ws) {
-    if (gameState.phase === 'none') {
-      ws.send(JSON.stringify({ type: 'LEAVE_ROOM', roomId: roomId.value, userId: userId.value }))
-    }
-    ws.close()
-  }
+  unregister()//取消注册，不关连接
 })
 </script>
 

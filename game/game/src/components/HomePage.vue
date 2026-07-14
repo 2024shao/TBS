@@ -22,27 +22,37 @@
 
     <!-- 右边按钮 -->
     <div class="right-btns">
-      <el-button size="large" @click="startGame" class="btn-main btn-start">
-        <el-icon><VideoPlay /></el-icon> 启动
-      </el-button>
-      <div class="btn-row">
-        <el-button size="large" @click="openRecords" class="btn-main btn-half">
-          <el-icon><TrophyBase /></el-icon> 记录
-        </el-button>
-        <el-button size="large" @click="openRoles" class="btn-main btn-half">
-          <el-icon><Avatar /></el-icon> 角色
-        </el-button>
+      <!-- 启动按钮 -->
+      <div class="svg-btn btn-start-svg" @click="startGame" style="background-image: url('/button/start.svg')">
+        <span class="btn-label"><img src="/log/start-log.svg" /></span>
+        <div class="btn-quick-link" @click.stop="quickMatch">
+          <img src="/button/quick-link.svg" />
+        </div>
+        <div class="btn-create-room" @click.stop="openRoom">
+          <img src="/button/create-room.svg" />
+        </div>
       </div>
-      <div class="btn-row">
-        <el-button size="large" @click="openFriends" class="btn-main btn-half">
-          <el-icon><UserFilled /></el-icon> 好友
-        </el-button>
-        <el-button size="large" @click="openFavorites" class="btn-main btn-half">
-          <el-icon><Star /></el-icon> 收藏
-        </el-button>
+
+      <!-- 记录按钮 -->
+      <div class="svg-btn btn-records" @click="openRecords" style="background-image: url('/button/record.svg')">
+        <span class="btn-label"><img src="/log/record-log.svg" /></span>
+      </div>
+
+      <!-- 角色按钮 -->
+      <div class="svg-btn btn-roles" @click="openRoles" style="background-image: url('/button/roles.svg')">
+        <span class="btn-label"><img src="/log/roles-log.svg" /></span>
+      </div>
+
+      <!-- 好友按钮 -->
+      <div class="svg-btn btn-friends" @click="openFriends" style="background-image: url('/button/friends.svg')">
+        <span class="btn-label"><img src="/log/friends-log.svg" /></span>
+      </div>
+
+      <!-- 收藏按钮 -->
+      <div class="svg-btn btn-favorites" @click="openFavorites" style="background-image: url('/button/favorites.svg')">
+        <span class="btn-label"><img src="/log/favorites-log.svg" /></span>
       </div>
     </div>
-
     <!-- 上窗口：自上而下滑入，返回按钮 -->
     <div :class="['top-slide-panel', { 'top-show': showPanel }]">
       <el-button class="btn-back" @click="closePanel">
@@ -183,7 +193,7 @@
         <div class="launch-row">
           <el-button class="launch-btn" @click="quickMatch">
             <el-icon><Connection /></el-icon>
-            快速匹配
+            快速连接
           </el-button>
         </div>
         <div class="launch-row">
@@ -195,9 +205,18 @@
         <div class="launch-row">
           <el-button class="launch-btn" @click="crisisContract">
             <el-icon><WarningFilled /></el-icon>
-            危机合约
+            合约??
           </el-button>
         </div>
+      </div>
+    </div>
+
+    <!-- 连接状态提示 -->
+    <div v-if="isMatching" class="match-overlay">
+      <div class="match-box">
+        <span class="match-loading"></span>
+        <span>{{ matchStatus }}</span>
+        <el-button size="small" @click="cancelQuickMatch">取消匹配</el-button>
       </div>
     </div>
 
@@ -521,6 +540,8 @@ import BattleLogViewer from './BattleLogViewer.vue'
 import { gameState, isTransitioning, doPhaseTransition } from '../composables/useGameState'
 import { avatarUrl, bgUrl, roleBgUrl, homepageBgmUrl } from '../config/cdn'
 import { useClickSound } from '../composables/useClickSound'
+import { useGameWs } from '../composables/useGameWs'
+import { joinMatch, cancelMatch, checkMatchStatus } from '../api/match'
 
 const { playClick, setVolume: setEffectVolume } = useClickSound()
 
@@ -566,82 +587,30 @@ async function doInvite(f) {
   ElMessage[res.success ? 'success' : 'warning'](res.message)
 }
 
-// 房间 WebSocket 连接
-let roomWs = null
+//webSocket连接
+const { ws, connect, send, disconnect, onMessage } = useGameWs()
 
+// 连接房间
 function connectRoomWs() {
-  if (roomWs && roomWs.readyState === WebSocket.OPEN) return
-  roomWs = new WebSocket(`ws://${location.hostname}:8080/ws/game`)
-  roomWs.onopen = () => {
-    roomWs.send(JSON.stringify({
-      type: 'JOIN_ROOM', roomId: currentRoomId.value, userId: userId.value,
-      side: roomRole.value === 'host' ? 0 : 1, username: username.value,
-      assistantId: userAssistantId.value, phase: 'lobby'
-    }))
-  }
-  roomWs.onmessage = (e) => {
-    const msg = JSON.parse(e.data)
-    switch (msg.type) {
-      case 'ROOM_JOINED':
-        if (roomRole.value === 'host') {
-          guestInfo.value = { id: msg.guestUserId, username: msg.guestUsername, assistantId: msg.guestAssistantId }
-        } else {
-          hostInfo.value = { id: msg.hostUserId, username: msg.hostUsername, assistantId: msg.hostAssistantId }
-        }
-        break
-      case 'LOBBY_READY':
-        if (msg.side === 0) hostReady.value = msg.ready
-        else guestReady.value = msg.ready
-        break
-      case 'PLAYER_LEFT':
-        ElMessage.warning('对方已离开房间')
-        resetRoom()
-        break
-      case 'BATTLE_START':
-        closeRoomWs()
-        Object.assign(gameState, {
-          roomId: currentRoomId.value, userId: userId.value, role: roomRole.value,
-          myUsername: username.value, myAssistantId: userAssistantId.value,
-          opponentUsername: roomRole.value === 'host' ? guestInfo.value.username : hostInfo.value.username,
-          opponentAssistantId: roomRole.value === 'host' ? guestInfo.value.assistantId : hostInfo.value.assistantId,
-          mySide: roomRole.value === 'host' ? 0 : 1
-        })
-        doPhaseTransition('pick')
-        break
-      case 'BACK_TO_LOBBY':
-        hostReady.value = false
-        guestReady.value = false
-        if (roomRole.value === 'host') {
-          guestInfo.value = { id: msg.guestUserId, username: msg.guestUsername, assistantId: msg.guestAssistantId }
-        } else {
-          hostInfo.value = { id: msg.hostUserId, username: msg.hostUsername, assistantId: msg.hostAssistantId }
-        }
-        showRoomPanel.value = true
-        break
-    }
-  }
-  roomWs.onclose = () => { roomWs = null }
+  connect(currentRoomId.value, userId.value, roomRole.value === 'host' ? 0 : 1, username.value, userAssistantId.value, 'lobby')
+}
+// 关闭房间（替代 closeRoomWs）
+function closeRoomWs() {
+  disconnect()
 }
 
-function closeRoomWs() {
-  if (roomWs) { roomWs.close(); roomWs = null }
-}
 
 const currentRoomId = ref(null)
 const guestInfo = ref({})
 
 async function toggleHostReady() {
   hostReady.value = !hostReady.value
-  if (roomWs && roomWs.readyState === WebSocket.OPEN) {
-    roomWs.send(JSON.stringify({ type: 'LOBBY_READY', roomId: currentRoomId.value, side: 0, ready: hostReady.value }))
-  }
+  send({ type: 'LOBBY_READY', roomId: currentRoomId.value, side: 0, ready: hostReady.value })
 }
 
 async function toggleGuestReady() {
   guestReady.value = !guestReady.value
-  if (roomWs && roomWs.readyState === WebSocket.OPEN) {
-    roomWs.send(JSON.stringify({ type: 'LOBBY_READY', roomId: currentRoomId.value, side: 1, ready: guestReady.value }))
-  }
+  send({ type: 'LOBBY_READY', roomId: currentRoomId.value, side: 1, ready: guestReady.value })
 }
 
 // 邀请弹窗
@@ -706,7 +675,6 @@ onMounted(() => {
     bgmAudio.value = new Audio(homepageBgmUrl(bgmFile))
     bgmAudio.value.loop = true
     applyMusicVolume()
-applyMusicVolume()
     bgmAudio.value.play().catch(() => {})
   }
   setEffectVolume(effectMuted.value ? 0 : effectVolume.value / 100)
@@ -718,6 +686,52 @@ applyMusicVolume()
     showSettings.value = true
     activeTab.value = 'user'
   }
+  onMessage((msg) => {
+    switch (msg.type) {
+      case 'ROOM_JOINED':
+        if (roomRole.value === 'host') {
+          guestInfo.value = { id: msg.guestUserId, username: msg.guestUsername, assistantId: msg.guestAssistantId }
+        } else {
+          hostInfo.value = { id: msg.hostUserId, username: msg.hostUsername, assistantId: msg.hostAssistantId }
+        }
+        break
+      case 'LOBBY_READY':
+        if (msg.side === 0) hostReady.value = msg.ready
+        else guestReady.value = msg.ready
+        break
+      case 'PLAYER_LEFT':
+        ElMessage.warning('对方已离开房间')
+        resetRoom()
+        break
+      case 'BATTLE_START':
+        Object.assign(gameState, {
+          roomId: currentRoomId.value, userId: userId.value, role: roomRole.value,
+          myUsername: username.value, myAssistantId: userAssistantId.value,
+          opponentUsername: roomRole.value === 'host' ? guestInfo.value.username : hostInfo.value.username,
+          opponentAssistantId: roomRole.value === 'host' ? guestInfo.value.assistantId : hostInfo.value.assistantId,
+          mySide: roomRole.value === 'host' ? 0 : 1
+        })
+        doPhaseTransition('pick')
+        break
+      case 'BACK_TO_LOBBY':
+        hostReady.value = false
+        guestReady.value = false
+        if (roomRole.value === 'host') {
+          guestInfo.value = { id: msg.guestUserId, username: msg.guestUsername, assistantId: msg.guestAssistantId }
+        } else {
+          hostInfo.value = { id: msg.hostUserId, username: msg.hostUsername, assistantId: msg.hostAssistantId }
+        }
+        showRoomPanel.value = true
+        break
+      case 'PLAYER_RECONNECTED':
+        if (msg.userId !== userId.value) {
+          ElMessage.success('对方已重连')
+        } else {
+          ElMessage.success('重连成功')
+        }
+        break
+    }
+  })
 })
 
 onUnmounted(() => {
@@ -728,9 +742,7 @@ onUnmounted(() => {
     bgmAudio.value = null
   }
   if (currentRoomId.value && !isStartingGame.value) {
-    if (roomWs && roomWs.readyState === WebSocket.OPEN) {
-      roomWs.send(JSON.stringify({ type: 'LEAVE_ROOM', roomId: currentRoomId.value, userId: userId.value }))
-    }
+    send({ type: 'LEAVE_ROOM', roomId: currentRoomId.value, userId: userId.value })
     closeRoomWs()
     leaveRoom(currentRoomId.value, userId.value)
   }
@@ -774,34 +786,94 @@ function openRoom() {
   guestReady.value = false
   if (!friendDataLoaded.value) loadFriendData()
 }
+//快速连接功能
+let matchPollTimer = null
+const isMatching = ref(false)
+const matchStatus = ref('')
 
-function quickMatch() {
-  ElMessage.info('快速匹配功能开发中')
+async function quickMatch() {
+  if (isMatching.value) return
+  isMatching.value = true
+  matchStatus.value = '正在连接中...'
+
+  const res = await joinMatch(userId.value, username.value, userAssistantId.value)
+
+  if (res.matched) {
+    matchStatus.value = '连接成功！'
+    ElMessage.success('连接成功！')
+    enterMatchedRoom(res)
+  } else {
+    ElMessage.info('已加入连接队列，等待对手...')
+    // 轮询检查连接状态
+    matchPollTimer = setInterval(async () => {
+      const status = await checkMatchStatus(userId.value)
+      console.log('轮询连接状态:', status)  
+      if (status.matched) {
+        matchStatus.value = '连接成功！'
+        ElMessage.success('连接成功！')
+        enterMatchedRoom(status)
+      }
+    }, 2000)
+  }
 }
 
-function createRoom() {
-  ElMessage.info('创建房间功能开发中')
+function cancelQuickMatch() {
+  if (matchPollTimer) {
+    clearInterval(matchPollTimer)
+    matchPollTimer = null
+  }
+  cancelMatch(userId.value)
+  isMatching.value = false
+  matchStatus.value = ''
+  ElMessage.info('已取消连接')
+}
+
+function enterMatchedRoom(res) {
+  isMatching.value = false
+  matchStatus.value = ''
+  if (matchPollTimer) {
+    clearInterval(matchPollTimer)
+    matchPollTimer = null
+  }
+  // 如果已经在房间里，先退出
+  if (currentRoomId.value) {
+    closeRoomWs()
+    leaveRoom(currentRoomId.value, userId.value)
+  }
+  currentRoomId.value = res.roomId
+  roomRole.value = res.role
+  if (res.role === 'host') {
+    guestInfo.value = {
+      id: res.opponentUserId,
+      username: res.opponentUsername,
+      assistantId: res.opponentAssistantId
+    }
+  } else {
+    hostInfo.value = {
+      id: res.opponentUserId,
+      username: res.opponentUsername,
+      assistantId: res.opponentAssistantId
+    }
+  }
+  showRoomPanel.value = true
+  connectRoomWs()
 }
 
 const isStartingGame = ref(false)
 
 async function startSimulation() {
-  if (roomWs && roomWs.readyState === WebSocket.OPEN) {
-    roomWs.send(JSON.stringify({ type: 'START_GAME', roomId: currentRoomId.value }))
-  }
+    send({ type: 'START_GAME', roomId: currentRoomId.value })
 }
 
 function handleBeforeUnload() {
-  if (currentRoomId.value && roomWs && roomWs.readyState === WebSocket.OPEN) {
-    roomWs.send(JSON.stringify({ type: 'LEAVE_ROOM', roomId: currentRoomId.value, userId: userId.value }))
+  if (currentRoomId.value) {
+    send({ type: 'LEAVE_ROOM', roomId: currentRoomId.value, userId: userId.value })
   }
   closeRoomWs()
 }
 
 async function doLeave() {
-  if (roomWs && roomWs.readyState === WebSocket.OPEN) {
-    roomWs.send(JSON.stringify({ type: 'LEAVE_ROOM', roomId: currentRoomId.value, userId: userId.value }))
-  }
+    send({ type: 'LEAVE_ROOM', roomId: currentRoomId.value, userId: userId.value })
   closeRoomWs()
   if (currentRoomId.value) {
     await leaveRoom(currentRoomId.value, userId.value)
@@ -1189,6 +1261,7 @@ async function confirmBg() {
     ElMessage.error('网络异常，更换失败')
   }
 }
+
 </script>
 
 <style scoped>
@@ -1450,35 +1523,158 @@ async function confirmBg() {
 .bottom-left {
   position: absolute; bottom: 32px; left: 24px;
 }
-.btn-friends {
-  font-size: 16px; padding: 10px 20px;
-  background: #333 !important; border: none !important;
-  color: #fff !important; border-radius: 0;
-}
 
 /* 右边按钮 */
+
 .right-btns {
-  position: absolute; top: 50%; right: 80px;
-  transform: translateY(-50%);
-  display: flex; flex-direction: column; gap: 12px;
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  width: 1000px;       /* 自由调整 */
+  z-index: 2;
 }
 
-.btn-main {
-  width: 240px; height: 72px; font-size: 36px;
-  border-radius: 0;
-  background: #333 !important; border: none !important;
-  color: #fff !important;
+.svg-btn {
+  position: relative;
+  cursor: pointer;
+  transition: opacity 0.4s ease, transform 0.2s;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: contain;
 }
 
-.btn-start {
-  width: 360px; height: 108px; font-size: 36px;
+.svg-btn:hover {
+  transform: scale(1.05);
 }
 
-.btn-row {
-  display: flex; gap: 14px;
+.btn-label {
+  position: absolute;   /* 自由移动 */
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: #000000;
+  font-size: 18px;
+  /* 默认位置，可被下面的具体按钮覆盖 */
+  bottom: 10px;
+  transform: translateX(-50%);
 }
-.btn-half {
-  width: 113px; font-size: 24px;
+
+.btn-label img {
+  width: 250px; height: auto;
+}
+
+.btn-start-svg {
+  width: 980px;
+  height: 324px;
+  position: absolute;
+  top: 130px;
+  right: -70px;
+}
+
+.btn-start-svg .btn-label {
+  top: 25px;
+  left: 180px;
+}
+
+.btn-start-svg .btn-label img{
+  width: 300px; height: auto;
+}
+
+.btn-quick-link {
+  position: absolute;
+  top: 60px;
+  left: 500px;
+  width: 200px;
+  height: 100px;
+}
+
+.btn-create-room {
+  position: absolute;
+  top: 160px;
+  left: 500px;
+  width: 200px;
+  height: 100px;
+}
+
+.btn-records {
+  position: absolute;
+  top: 430px;
+  right: 550px;
+  width: 450px;     /* 自己调 */
+  height: 270px;     /* 自己调 */
+}
+
+.btn-records .btn-label {
+  font-size: 18px;
+  top: 25px;
+  left: 300px;
+  height: 200px;
+  width: 450px;
+}
+
+.btn-records .btn-label img {
+  width: 300px; height: auto;
+}
+
+.btn-roles {
+  position: absolute;
+  top: 434px;
+  right: 50px;
+  width: 450px;
+  height: 270px;
+}
+
+.btn-roles .btn-label {
+  font-size: 18px;
+  top: 25px;
+  left: 300px;
+  height: 200px;
+  width: 450px;
+}
+
+.btn-roles .btn-label img {
+  width: 300px; height: auto;
+}
+
+.btn-friends {
+  position: absolute;
+  top: 675px;
+  right: 450px;
+  width: 450px;
+  height: 270px;
+}
+
+.btn-friends .btn-label {
+  font-size: 18px;
+  top: 25px;
+  left: 300px;
+  height: 200px;
+  width: 450px;
+}
+
+.btn-friends .btn-label img {
+  width: 300px; height: auto;
+}
+
+.btn-favorites {
+  position: absolute;
+  top: 694px;
+  right: -50px;
+  width: 450px;
+  height: 270px;
+}
+
+.btn-favorites .btn-label {
+  font-size: 18px;
+  top: 25px;
+  left: 300px;
+  height: 200px;
+  width: 450px;
+}
+
+.btn-favorites .btn-label img {
+  width: 300px; height: auto;
 }
 
 /* 左上角按钮统一颜色 */
@@ -2014,5 +2210,41 @@ async function confirmBg() {
 .invite-actions {
   display: flex; gap: 12px; justify-content: center;
   margin-top: 20px;
+}
+
+.match-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+}
+.match-box {
+  background: #1a1a2e;
+  border: 2px solid #4fc3f7;
+  border-radius: 12px;
+  padding: 30px 50px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  color: #fff;
+  font-size: 18px;
+}
+.match-loading {
+  width: 40px;
+  height: 40px;
+  border: 3px solid #4fc3f7;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 </style>

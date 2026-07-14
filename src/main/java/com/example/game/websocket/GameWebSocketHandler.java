@@ -58,6 +58,8 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
         int hostUserId = 0;
         int guestUserId = 0;
         boolean inBattle = false;
+        long disconnectedAt = 0;   // 0 表示没断开，>0 表示断开的时间戳
+        int disconnectedUserId = 0;
     }
 
     @Override
@@ -85,6 +87,17 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
         String username = (String) msg.get("username");
         int assistantId = msg.get("assistantId") != null ? (int) msg.get("assistantId") : 30086009;
         String phase = msg.get("phase") != null ? (String) msg.get("phase") : "game";
+
+        //判断是否是重连玩家
+        RoomDraft existing = drafts.get(roomId);
+        if (existing != null && existing.disconnectedAt > 0) {
+            existing.disconnectedAt = 0;
+            existing.disconnectedUserId = 0;
+            rooms.computeIfAbsent(roomId, k -> new ConcurrentHashMap<>()).put(userId, session);
+            broadcast(roomId, Map.of("type", "PLAYER_RECONNECTED", "userId", userId));
+            return;
+        }
+
         rooms.computeIfAbsent(roomId, k -> new ConcurrentHashMap<>()).put(userId, session);
         RoomDraft d = drafts.computeIfAbsent(roomId, k -> new RoomDraft());
         if (side == 0) { d.hostUsername = username; d.hostAssistantId = assistantId; d.hostUserId = userId; }
@@ -239,7 +252,7 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
         if (d.hostReady && d.guestReady) {
             d.hostReady = false;
             d.guestReady = false;
-            broadcast(roomId, Map.of("type", "BATTLE_START"));
+            broadcast(roomId, Map.of("type", "BATTLE_BEGIN"));
         }
     }
 
@@ -314,7 +327,13 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
             if (room != null) {
                 String json = mapper.writeValueAsString(data);
                 for (WebSocketSession s : room.values()) {
-                    if (s.isOpen()) s.sendMessage(new TextMessage(json));
+                    if (s.isOpen()) {
+                        synchronized (s) {                    // ← 加锁
+                            if (s.isOpen()) {                 // ← 双重检查
+                                s.sendMessage(new TextMessage(json));
+                            }
+                        }
+                    }
                 }
             }
         } catch (IOException e) {
@@ -326,14 +345,30 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
         rooms.forEach((roomId, room) -> {
             room.values().remove(session);
-            if (room.isEmpty()) {
-                rooms.remove(roomId);
-                RoomDraft d = drafts.get(roomId);
-                if (d != null && d.inBattle) return;
-                drafts.remove(roomId);
-            } else {
-                broadcast(roomId, Map.of("type", "PLAYER_LEFT"));
+            RoomDraft d = drafts.get(roomId);
+            if (d == null) return;
+
+            // 找出断开的是谁
+            int disconnectedUserId = 0;
+            if (d.hostUserId > 0 && !room.containsKey(d.hostUserId)) {
+                disconnectedUserId = d.hostUserId;
+            } else if (d.guestUserId > 0 && !room.containsKey(d.guestUserId)) {
+                disconnectedUserId = d.guestUserId;
             }
+            d.disconnectedAt = System.currentTimeMillis();
+            d.disconnectedUserId = disconnectedUserId;
+
+            new Thread(() -> {
+                try { Thread.sleep(30000); } catch (Exception ex) {}
+                if (d.disconnectedAt > 0) {
+                    // 30 秒未重连，清理房间
+                    if (d.disconnectedUserId > 0) {
+                        broadcast(roomId, Map.of("type", "PLAYER_LEFT", "userId", d.disconnectedUserId));
+                    }
+                    rooms.remove(roomId);
+                    drafts.remove(roomId);
+                }
+            }).start();
         });
     }
 }

@@ -80,10 +80,8 @@ public class DamageProcessor {
             DamageProcess(null,defender, room, 1);
         }
 
-        if(attacker == null){
-            //查看是否角色是否死亡
-            room.getSurvivalChecker().checkSurvival(defender, room);
-        }
+        //查看是否角色是否死亡
+        room.getSurvivalChecker().checkSurvival(defender, room);
     }
 
 }

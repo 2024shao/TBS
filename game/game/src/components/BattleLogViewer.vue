@@ -143,7 +143,9 @@ import { skillName, passiveName } from '../config/skillNames'
 import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { gameState } from '../composables/useGameState'
+import { useGameWs } from '../composables/useGameWs'
 
+const { connect, send, onMessage } = useGameWs()
 const {
   sessionId, roleInput, loading, currentStep, autoPlaying, showLog, steps,
   currentAction, gameOver, logContainer,
@@ -202,12 +204,21 @@ onMounted(() => {
     startBattle()
   }
   window.addEventListener('keydown', onKeydown)
-  connectBattleWs()
+  connect(roomId.value, userId.value, mySide.value, gameState.myUsername)
+})
+
+const unregister = onMessage((msg) => {
+  if (msg.type === 'PLAYER_READY') {
+    if (msg.side !== mySide.value) opponentReady.value = true
+  } else if (msg.type === 'BATTLE_BEGIN') {
+    battleStarted.value = true
+    autoPlay()
+  }
 })
 
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeydown)
-  if (battleWs) battleWs.close()
+  unregister()
 })
 
 const roomId = computed(() => gameState.roomId)
@@ -216,38 +227,10 @@ const mySide = computed(() => gameState.mySide)
 const myReady = ref(false)
 const opponentReady = ref(false)
 const battleStarted = ref(false)
-let battleWs = null
-
-function connectBattleWs() {
-  if (!roomId.value || !userId.value) {
-    return
-  }
-  battleWs = new WebSocket(`ws://${location.hostname}:8080/ws/game`)
-  battleWs.onopen = () => {
-    battleWs.send(JSON.stringify({
-      type: 'JOIN_ROOM', roomId: roomId.value, userId: userId.value, side: mySide.value, username: gameState.myUsername
-    }))
-  }
-  battleWs.onmessage = (e) => {
-    const msg = JSON.parse(e.data)
-    if (msg.type === 'PLAYER_READY') {
-      if (msg.side !== mySide.value) {
-        opponentReady.value = true
-      }
-    } else if (msg.type === 'BATTLE_START') {
-      battleStarted.value = true
-      autoPlay()
-      battleWs.close()
-    }
-  }
-}
-
 function clickReady() {
   if (myReady.value) return
   myReady.value = true
-  if (battleWs && battleWs.readyState === WebSocket.OPEN) {
-    battleWs.send(JSON.stringify({ type: 'READY', roomId: roomId.value, role: mySide.value }))
-  }
+  send({ type: 'READY', roomId: roomId.value, role: mySide.value })
   ElMessage.success('已就绪，等待对方...')
 }
 

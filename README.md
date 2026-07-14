@@ -6,11 +6,11 @@
 
 ### 项目演示
 
-![选将调位](https://tbs-yty.oss-cn-guangzhou.aliyuncs.com/demo/pick.gif)
+![选将调位](https://github.com/user-attachments/assets/1052139b-4a4d-4878-b74e-cb2bb42cec2b)
 
-![回合制战斗](https://tbs-yty.oss-cn-guangzhou.aliyuncs.com/demo/battle.gif)
+![回合制战斗](https://github.com/user-attachments/assets/b70a58c8-7fff-4645-b197-825182115cd3)
 
-![其他部分](https://tbs-yty.oss-cn-guangzhou.aliyuncs.com/demo/other.gif)
+![其他部分](https://github.com/user-attachments/assets/ff72ba93-d3dd-41e0-afa0-3be31f2edcc2)
 
 ---
 
@@ -19,6 +19,7 @@
 - 🔐 **用户系统**：注册 / 登录 / Token 认证 / 账号管理（修改头像、背景、BGM）
 - 👥 **好友系统**：搜索玩家 / 添加好友 / 处理好友申请
 - 🏠 **对战大厅**：创建房间 / 邀请好友 / 接受邀请
+- 🎲 **快速匹配**：匹配队列，自动配对随机玩家
 - 🎯 **选将阶段**：从角色池选择 5 名角色，悬停查看立绘与详情
 - 🔄 **调位阶段**：调整角色站位顺序，点击交换位置，实时同步
 - ⚔️ **回合制战斗**：双方轮流释放主动技能，被动自动触发
@@ -26,6 +27,7 @@
 - 🏆 **胜负判定**：一方全灭判胜，200 回合未分胜负判平局
 - 🎨 **动画过渡**：窗口切换黑屏过渡，详情面板滑入滑出动画
 - 🔔 **实时通知**：WebSocket 推送房间状态、邀请、位置确认
+- 🔄 **断线重连**：30 秒宽限期，自动重连最多 10 次
 
 ---
 
@@ -51,7 +53,8 @@
 │   │   ├── RoomService.java              
 │   │   ├── AuthService.java              
 │   │   ├── GameService.java              
-│   │   └── FriendService.java            
+│   │   └── FriendService.java
+│   │   └── MatchService.java             # 快速匹配            
 │   ├── entity/                           # 实体类
 │   │   ├── User.java
 │   │   ├── Role.java
@@ -82,6 +85,7 @@
 │   │           ├── Passive.java
 │   │           └── PassiveEffect.java
 │   ├── websocket/                        
+│   │   └── GameWebSocketHandler.java      # 房间实时通信                        
 │   ├── config/                           
 │   └── TBSApplication.java               
 ├── game/game/src/                        # 游戏前端
@@ -95,15 +99,18 @@
 │   │   ├── AccountManage.vue             # 账号管理
 │   │   └── FriendsPage.vue               # 好友页面
 │   ├── composables/                      # 组合式函数
+│   │   ├── useGameWs.js                  # 全局 WebSocket 连接
 │   │   ├── useGameState.js               # 游戏状态管理
 │   │   ├── useBattleLog.js               # 战斗日志解析
 │   │   ├── useClickSound.js              # 音效管理
 │   │   ├── useParticleEffect.js          # 粒子特效
 │   │   └── useProjectile.js              # 弹道特效
 │   ├── api/                              # 接口封装
+│   │   └── match.js                      # 匹配接口
 │   ├── router/                           # 路由守卫
 │   ├── config/                           # 配置（CDN、技能名）
 │   └── utils/                            # 工具（日志解析）
+├── public/button/              # 按钮 SVG 图标
 ├── admin-ui/src/                         # 管理后台
 │   ├── components/RoleManagement.vue     # 角色管理
 │   └── api/                              # 接口封装
@@ -209,9 +216,10 @@ sudo journalctl -u tbs -f
 两个角色拥有相同被动（如 `Stealing_Heaven`）互相复制，触发无限递归。
 通过日志定位到 `StackOverflowError`，在自动被动执行器中加入递归深度限制和自身类型跳过逻辑。
 
-### 3. WebSocket 实时状态同步
+### 3. WebSocket 全局共享与断线重连
 
-选将、调位、战斗三个阶段需要双方实时同步。通过 `gameState.phase` 驱动组件切换，各阶段独立维护 WebSocket 连接，保证状态一致性。
+原先每个阶段（大厅、选将、调位、战斗）各自建立一条 WebSocket 连接，组件切换时销毁重建，浪费 TCP 握手开销。
+重构为全局 composable `useGameWs`，四个组件共用同一条连接，各阶段独立注册 Handler。同时实现断线重连机制：前端自动重试（最多 10 次），后端 30 秒宽限期延迟清理房间，支持玩家短暂断网后恢复对局。
 
 ### 4. HTTPS + 域名 + Nginx 反向代理
 
@@ -222,11 +230,11 @@ sudo journalctl -u tbs -f
 ## 未来优化
 
 - [ ] 引入 Redis 缓存角色数据
+- [ ] 安全问题，添加验证防止玩家通过控制台修改游戏状态
 - [ ] 添加单元测试与集成测试
 - [ ] Docker Compose 一键部署
 - [ ] 前端迁移到 TypeScript
 - [ ] 战斗日志持久化，支持历史对局回放
-- [ ] 匹配队列，自动匹配对手
 - [ ] 游戏表现优化，如动画，更多音效，BGM
 - [ ] 沉浸式体验，角色语音，界面设计
 
